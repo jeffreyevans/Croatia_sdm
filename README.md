@@ -14,7 +14,7 @@ Other code
 
 1. accuracy.R – Modification of rfUtilities function which provides validation metrics based on confusion matrix
 
-2. check.packages.R - Checks if required libraries are installed and adds them if not in library. Also defines library environment and mirror. Can be urn to simply add required libraries to current R environmnet. 
+2. check.packages.R - Checks if required libraries are installed and adds them if not in library. Also defines library environment and mirror. Can be used to simply add required libraries to current R environmnet. 
 
 3. occurrence.threshold.R - Modification of rfUtilities function to include log loss as option
 
