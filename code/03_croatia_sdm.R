@@ -54,6 +54,8 @@ dup.pairs <- function(x) {
 
 rmse <- function(y,x) { sqrt(mean((y - x)^2)) }
 
+brier.score <-  function(x, y) { mean((x - y)^2) }
+
 #********************************************
 # read raster covariates stack and create
 # 500m reference raster for pseudo-absences
@@ -151,18 +153,21 @@ d <- list.dirs(mdl.dir)[-c(1)]
     #********************
     # pairwise and multi collinearity screening 
     all.vars <- names(x)    
-    cl.vars <- try(collinear(x, p = 0.85, nonlinear = FALSE, p.value = 0.001))
-	  if(exists("cl.vars")){
+    cl.vars <- try( collinear(x, p = 0.85, nonlinear = FALSE, p.value = 0.001) )
+	  if(!inherits(cl.vars, "try-error")){
         if(length(cl.vars) > 0)
           x <- x[,-which(names(x) %in% cl.vars)]
 	  }	
-    mc <- multi.collinear(x, p = 0.05, perm = TRUE, n = 99)
-      mc.vars <- mc[which( mc$frequency > 5 ),]$variables 
-        if(length(mc.vars) > 0) 
-          x <- x[,-which(names(x) %in% mc.vars)]
-    cat("The following variables were dropped:",
-      all.vars[which(is.na(match(all.vars, names(x))))], "\n")
-		
+	  
+    try( mc <- multi.collinear(x, p = 0.05, perm = TRUE, n = 99) )
+	  if(!inherits(mc, "try-error")){	
+        mc.vars <- mc[which( mc$frequency > 5 ),]$variables 
+          if(length(mc.vars) > 0) 
+            x <- x[,-which(names(x) %in% mc.vars)]
+          cat("The following variables were dropped:",
+        all.vars[which(is.na(match(all.vars, names(x))))], "\n")
+	  }
+	  
 	# Combine presence and pseudo-absence, write shapefile 
 	spp <- cbind(spp, x)
 	  #st_write(spp, "pa_spp.shp", delete_layer = TRUE)
@@ -192,7 +197,7 @@ d <- list.dirs(mdl.dir)[-c(1)]
     non.sig <- rownames(imp.p)[which(imp.p$pvalue >= 0.05 & imp.p$importance >= 0)]  
       if(length(non.sig) == 0) non.sig = NULL
 
-	report[["nonsig.vars"]] <- non.sig 
+	  report[["nonsig.vars"]] <- non.sig 
     report[["sel.vars"]] <- sel.vars
 
     #********************
@@ -223,32 +228,44 @@ d <- list.dirs(mdl.dir)[-c(1)]
 	se <- data.frame(y=as.numeric(as.character(dat$y)), se.fun(rf.fit, dat))
 	
 	#**** Confusion matrix fit
+    #**** Global and local log loss, log likelihood fit and Brier score
 	report[["validation"]] <- accuracy(table(se$y, ifelse(se$p > 0.6, 1, 0))) 
     report[["log.loss"]] <- logLoss(y = se$y, p = se$p) 		
+    report[["Brier.score"]] <- brier.score(se$y, se$p)	
 		
-    #**** Global and local log loss, log likelihood fit
-    gll <- logLoss(y = se$y, p = se$p)    
-    ll <- logLoss(y = se$y, p = se$p, global=FALSE) 
+    # ll <- logLoss(y = se$y, p = se$p, global=FALSE) 
 
     #**** cross-validation w/ 10% Bootstrap
-	cv.logloss <- vector()
-	cv.error <- vector()
-	for(j in 1:99){
+	ncv = 99
+	cv <- data.frame(matrix(ncol = 6, nrow = ncv))
+	  names(cv) <- c("log.loss", "error", "brier", "sensitivity", "specificity", "kappa")
+
+	for(j in 1:ncv){
 	  idx1 <- sample(which(dat$y %in% "1"), round(length(which(dat$y %in% "1")) * 0.10,0)) 
 	  idx0 <- sample(which(dat$y %in% "0"), round(length(which(dat$y %in% "1")) * 0.10,0)) 
 	  withold <- rbind(dat[idx0,], dat[idx1,])
+	  p.idx <- which(withold$y == 1)
 	  dat.sub <- dat[-c(idx1, idx0),]
       rf.cv <- ranger(y = dat.sub$y, x = dat.sub[,2:ncol(dat)], probability = TRUE, 
                          num.trees = nboot, importance="permutation",
 						 sample.fraction = c(0.5, 0.5), replace = TRUE,
-      				     keep.inbag = TRUE)     
+      				     keep.inbag = TRUE)   
 	    cv.se <- data.frame(y=as.numeric(as.character(withold$y)), 
 		                    se.fun(rf.cv, withold))
-		cv.logloss[j] <- logLoss(y = cv.se$y, p = cv.se$p)
-		cv.error[j] <- rf.cv$prediction.error 
+		cv.val <- accuracy(table(cv.se$y, ifelse(cv.se$p > 0.6, 1, 0)))
+		cv[j,] <- c(as.numeric(logLoss(y = cv.se$y, p = cv.se$p)),
+		            brier.score(cv.se$y, cv.se$p),
+		            rf.cv$prediction.error, 
+		            cv.val$sensitivity,
+		            cv.val$specificity,
+		            cv.val$kappa)
 	}
-	report[["cv.logloss"]] <- median(cv.logloss)
-	report[["cv.error"]] <- median(cv.error)
+	          report[["cv.logloss"]] <- median(cv$log.loss)
+	        report[["cv.error"]] <- median(cv$error)
+	      report[["cv.brier"]] <- median(cv$brier)
+	    report[["cv.sensitivity"]] <- median(cv$sensitivity)
+	  report[["cv.specificity"]] <- median(cv$specificity)
+	report[["cv.kappa"]] <- median(cv$kappa)
 	
     #********************
     # Spatial prediction
@@ -261,13 +278,17 @@ d <- list.dirs(mdl.dir)[-c(1)]
                                  class = "1", type = "kappa"))
     logloss.ss <- suppressWarnings(occurrence.threshold(rf.fit,  p=pt,  
                                  class = "1", type = "logloss"))
-    report[["p.threshold"]] <- round(mean(c(sum.ss$prob.threshold, 
-	                            kappa.ss$prob.threshold,
-                                logloss.ss$prob.threshold)),3)
+     thresholds <- c(round(mean(c(sum.ss$prob.threshold, 
+	                kappa.ss$prob.threshold,
+                    logloss.ss$prob.threshold)),3),
+					sum.ss$prob.threshold, kappa.ss$prob.threshold, 
+					logloss.ss$prob.threshold) 
+      names(thresholds) <- c("threshold", "sum.ss", "kappa", "log.loss")
+    report[["p.threshold"]] <- thresholds 
     
 	sdm <- predict(r, rf.fit, fun=pfun, na.rm=TRUE)
 	  names(sdm) <- "SDM"
-    sdm.class <- ifel(sdm >= report[["p.threshold"]], 1, 0)
+    sdm.class <- ifel(sdm >= report$p.threshold[1], 1, 0)
 	  names(sdm.class) <- "SDM_CLASS"
 	sdm <- c(sdm, sdm.class)  
     writeRaster(c(sdm, sdm.class), "spp_results.tif",
@@ -373,7 +394,7 @@ d <- list.dirs(mdl.dir)[-c(1)]
 	  write(paste0("Number of Pseudo-absence obs: ", report$null.n),
             file=(file.path(i, out.val)), append=TRUE)	  
 	write(paste0(), file=(file.path(i, out.val)), append=TRUE)
-    write(paste0("Model fit"), file=(file.path(i, out.val)), append=TRUE)	  
+    write(paste0("Model selection"), file=(file.path(i, out.val)), append=TRUE)	  
       write(paste0("Dropped correlated variables: ", report$dropped.vars),
 	        file=(file.path(i, out.val)), append=TRUE)	
       write(paste0("Dropped non-significant variables: ", report$nonsig.vars),
@@ -388,6 +409,8 @@ d <- list.dirs(mdl.dir)[-c(1)]
             file=(file.path(i, out.val)), append=TRUE) 	  
       write(paste0("Log loss: ", report$log.loss),
             file=(file.path(i, out.val)), append=TRUE) 	  
+      write(paste0("Brier score: ", report$Brier.score),
+            file=(file.path(i, out.val)), append=TRUE) 	  			
       write(paste0("Sensitivity: ", report$validation$sensitivity),
             file=(file.path(i, out.val)), append=TRUE) 	  
       write(paste0("Specificity: ", report$validation$specificity),
@@ -409,8 +432,20 @@ d <- list.dirs(mdl.dir)[-c(1)]
 	        file=(file.path(i, out.val)), append=TRUE)	
       write(paste0("Cross-validation log loss: ", report$cv.logloss),
 	        file=(file.path(i, out.val)), append=TRUE)	
+     write(paste0("Cross-validation Brier Score: ", report$cv.brier),
+	        file=(file.path(i, out.val)), append=TRUE)	
+     write(paste0("Cross-validation sensitivity: ", report$cv.sensitivity),
+	        file=(file.path(i, out.val)), append=TRUE)	
+     write(paste0("Cross-validation specificity: ", report$cv.specificity),
+	        file=(file.path(i, out.val)), append=TRUE)	
+     write(paste0("Cross-validation kappa: ", report$cv.kappa),
+	        file=(file.path(i, out.val)), append=TRUE)				
 	write(paste0(), file=(file.path(i, out.val)), append=TRUE)
-      write(paste0("Probability classification threshold: ", report$p.threshold), 
+    write(paste0("Probability threshold for binomial classification"), 
+	      file=(file.path(i, out.val)), append=TRUE)
+      write(paste0("Probability classification threshold ", 
+	        c("mean: ", "sum.ss: ", "kappa: ", "log loss: "), 
+			report$p.threshold), 
 	        file=(file.path(i, out.val)), append=TRUE)	  
 	# file.show(file.path(i, out.val))
 	
