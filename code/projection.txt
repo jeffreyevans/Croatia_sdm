@@ -1,0 +1,6 @@
+# From: HTRS96 / Croatia TM EPSG:3765
+# https://epsg.io/3765
+
+# To ETRS89-extended / LAEA Europe EPSG:3035
+# https://epsg.io/3035
+
