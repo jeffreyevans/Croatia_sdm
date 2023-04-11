@@ -15,4 +15,4 @@ Contact:
 Jeffrey S. Evans, Ph.D.
 Senior Landscape Ecologist & Biometrician 
 The Nature Conservancy | Global Protect, Science 
-Laramie, WY | jeffrey_evans@tnc.org
+jeffrey_evans@tnc.org
