@@ -9,6 +9,9 @@ setwd(root)                           # Set working directory to main root direc
   dat.dir <- file.path(root, "data")  # directory with raster covariates
   mdl.dir <- file.path(root, "SDM")   # root directory of model directories
 
+# Read biogeographic regions (change appropriately)
+biogeo <- sf::st_read(file.path(dat.dir, "biogeographic_regions.shp"))
+
 # number of pseudo-absence samples, if nsample = NULL  
 # then the defined sample fraction (sfract) will be used, 
 # based on number 0f non-NA raster, to draw sample size.
@@ -35,8 +38,7 @@ pfun <- function(object, newdata, i = 2) {
 
 se.fun <- function(object, newdata, i = 2) {
   se <- predict(object, data = newdata, type = "se", se.method = "infjack")
-  data.frame(p=se$predictions[,i], se=se$se[,i])
-  
+  data.frame(p=se$predictions[,i], se=se$se[,i])  
 }
 
 dup.pairs <- function(x) {
@@ -64,14 +66,6 @@ r <- rast(list.files(dat.dir, pattern = "tif$",
           full.names = TRUE))
 
 bdy <- st_read(file.path(dat.dir, "bdy.shp"))
-ref <- rast(ext(bdy), resolution=500, crs=crs(r))
-  ref[] <- rep(1,ncell(ref))
-    ref <- mask(ref, vect(bdy))
-
-if(is.null(nsample)){
-  rn <- length(ref[!is.na(ref)][,1])
-  nsample <- round(rn * sfract, 0)
-}
 
 #********************************************
 #********************************************
@@ -89,13 +83,41 @@ d <- list.dirs(mdl.dir)[-c(1)]
       report[["sdm.out"]] <- paste0("SDM rasters written to ", file.path(i, out.plots))
       report[["nboot"]] <- paste0("Number of Random Forests Bootstrap replicates: ", nboot)
 	  report[["pasamp"]] <- paste0("Number of pseudo-absence observations: ", nsample)
+
+    #********************
+		
+    #********************
+    # read raster and spp data
+    r <- rast(list.files(dat.dir, pattern = "tif$", 
+              full.names = TRUE))
  
 	spp <- st_read(list.files(i, "shp$")[1], quiet = TRUE)
       pres.idx <- grep("true abs", spp$obs_type) 
         if(length(pres.idx) > 0) spp <- spp[-pres.idx,]
 
     #********************
+    # relate and subset rasters to biogeographic regions
+	
+	# NOTE; need to reconcile "region" name with actual data
+    spp.biogeo <- sf::st_intersection(spp, biogeo)
+    
+	if(length(unique(spp.biogeo$region)) < length(unique(biogeo$region))) {
+	  biogeo.sub <- biogeo[which(biogeo$region == unique(sp.biogeo$region)),]
+      ref <- terra::mask(terra::crop(ref, terra::ext(biogeo.sub), terra::vect(biogeo.sub))
+      r <- terra::mask(terra::crop(r, terra::ext(biogeo.sub), terra::vect(biogeo.sub))
+    } else {
+      ref <- rast(ext(bdy), resolution=500, crs=crs(r))
+        ref[] <- rep(1,ncell(ref))
+          ref <- mask(ref, vect(bdy))	
+	}
+
+    #********************
     # Create pseudo-absence
+    if(is.null(nsample)){
+      rn <- length(ref[!is.na(ref)][,1])
+      nsample <- round(rn * sfract, 0)
+    }
+
     pa <- pseudo.absence(spp, n=nsample, KDE=FALSE, ref = ref, 
                          sigma=bw.method)
 	

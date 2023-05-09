@@ -21,6 +21,14 @@ Other code
 
 Contact:
 
+Iva Mihalić 
+BIOM, Croatia
+iva.mihalic@biom.hr
+
+Louie Taylor
+BIOM, Croatia	
+louie.taylor@biom.hr
+
 Jeffrey S. Evans, Ph.D.
 Senior Landscape Ecologist & Biometrician 
 The Nature Conservancy | Global Protect, Science 
