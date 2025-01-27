@@ -28,12 +28,12 @@ min.ct = 20                                     # Minimum number of observsation
 correct.bias = c(TRUE, FALSE)[1]                # Apply bias correction to occurance data 
 r.dist = 100                                    # distance threshold for correcting road bias
 bias.size = 0.10                                # subsampling size for correcting road bias
-model.select = c(TRUE, FALSE)[2]                # Apply model selection
+model.select = c(TRUE, FALSE)[1]                # Apply model selection
 uncertainty = c(TRUE, FALSE)[2]                 # estimate spatial uncertainty
 multi.thread = c(TRUE, FALSE)[2]                # parallel pcrocessing of predict
 ncore = parallel::detectCores()-1               # number of cores for parallel processing
 which.dat = c("all", "GPS", "opportunistic")[3] # what data to use for mammals
-bird.rank = c(0:4)[1]                           # what weights to run for bird models
+bird.rank = c(0:4)[4]                           # what weights to run for bird models
 
 out.plots = "SDM_model.pdf"           # name of pdf plots output 
 out.mdl = "SDM_model.RData"           # name of saved R model object ".RData"
@@ -82,26 +82,22 @@ brier.score <-  function(x, y) { mean((x - y)^2) }
 #            "forest.tif", "forest_cover.tif", "forest_height.tif", "forest_type_pct.tif", 
 #            "grassland.tif", "hli.tif", "LAI_trend.tif", "scosa.tif", "srr.tif", "tpi.tif", 
 #            "tri.tif", "wetland.tif")        
-parms <- c("climate_pca.tif", "crops.tif", "development_multiscale.tif", "dist_dev.tif", 
-           "dist_forest.tif", "dist_lake.tif", "dist_roads.tif", "dist_stream.tif", 
-		   "forest_cover.tif", "forest_heights.tif", "forest_pct.tif", 
-		   "grasslands_multiscale.tif", "hli.tif", "LAI_trend.tif", "scosa.tif", "srr.tif", 
-            "tpi.tif", "tri.tif", "water.tif", "xcoord.tif", "ycoord.tif")
+parms <- c("climate_pca.tif", "crop_pct.tif", "development_multiscale.tif", "dist_dev.tif", 
+           "dist_forest.tif", "dist_roads.tif", "dist_stream.tif", 
+		   "canopy_cover.tif", "forest_heights.tif", "forest_type_pct.tif", 
+		   "grasslands_multiscale.tif", "hli.tif", "scosa.tif", "srr.tif", 
+           "tpi.tif", "tri.tif")
 r <- rast(file.path(dat.dir, parms))	   
 
-bdy <- st_transform(st_read(file.path(dat.dir, "Croatia.gpkg"), "boundary"), prj)
+bdy <- st_read(file.path(dat.dir, "Croatia.gpkg"), "biogeographic_regions")
 ref <- rast(file.path(dat.dir, "mask100m.tif"))
 dev <- rast(file.path(dat.dir, "developed_mask.tif"))
-  dev <- mask(crop(dev, ref), ref)
+biogeo <- rast(file.path(dat.dir, "biomask.tif"))	
 
-pa.ref <- rast(ext(ref), resolution = 300, crs=crs(ref))
-  pa.ref[] <- 1
-    pa.ref <- mask(pa.ref, vect(bdy))
-biogeo <- st_transform(st_cast(st_read(file.path(dat.dir, "Croatia.gpkg"), 
-                       "biogeographic_regions"), "POLYGON"), prj)
-
-# collapse "pannonian" into "continental"   
-biogeo$short_name[which(biogeo$short_name == "pannonian")] <- "continental" 
+## Read bioregions data and collapse "pannonian" into "continental"   
+#biogeo <- st_transform(st_cast(st_read(file.path(dat.dir, "Croatia.gpkg"), 
+#                       "biogeographic_regions"), "POLYGON"), prj)
+#biogeo$short_name[which(biogeo$short_name == "pannonian")] <- "continental" 
 
 if(is.null(nsample)){
   rn <- length(ref[!is.na(ref)][,1])
@@ -124,19 +120,22 @@ if(group == "birds"){
                           cts = st_layers(file.path(mdl.dir, spp.dat))$features)
     spp.names <- spp.names[which(spp.names$cts >= min.ct),]$spp
 }
+
+#*** Subset models for running multiple R sessions
+# spp.names <- spp.names[1:45]
+# spp.names <- spp.names[46:86]
+
 fin.mds <- basename(list.dirs(mdl.dir))[-1]
   fin.mds <- which(spp.names %in% fin.mds)
     if(length(fin.mds) > 0)
       spp.names <- spp.names[-fin.mds]
 
-#*** Subset models for running multiple R sessions
-# spp.names <- spp.names[1:65]
-# spp.names <- spp.names[66:130]
-
 ct=0    
   for(i in spp.names) {
   ct=ct+1
     cat("\n", "Processing", basename(i), "\n")
+	  flush.console()	 
+      Sys.sleep(0.01)	
 	
     #***************************************************
     # read and build data	
@@ -177,6 +176,8 @@ ct=0
 	  cat("***************************************************", "\n")
       cat("**** Correcting for sampling bias", "\n")
       cat("***************************************************", "\n")
+	    flush.console()	 
+        Sys.sleep(0.01)		  
       rds <- rast(file.path(dat.dir, "dist_roads.tif")) 
         drds <- extract(rds, spp)[,-1]
           na.idx <- unique(which(is.na(drds), arr.ind = TRUE)[,1])
@@ -212,28 +213,39 @@ ct=0
 			cat("**** Removed", norg-nrow(spp),  "bias points -", 100 - round(nrow(spp)/norg*100,0), "percent", "\n")
           }
 	  }
-
+      if(nrow(spp) < min.ct) {
+        message("Not enough observations, skipping model")
+	      next
+      }
 	  cat("***************************************************", "\n")
       cat("**** Probabilistic Random Forests for:", i, "\n")
       cat("****   Model has ", nrow(spp), " prevleance observations", "\n")  
       cat("****   Running ", ct, " of ", length(spp.names), " models", "\n") 
       cat("***************************************************", "\n") 	  
-		
-    #***************************************************
+	  flush.console()	 
+      Sys.sleep(0.01)			
+    
+	#***************************************************
     # mask to observed biogeographic regions
-    spp.biogeo <- table(factor(suppressWarnings(sf::st_intersection(spp, biogeo)$short_name),
-	                    levels=c("mediterranean", "alpine", "continental")))
-    # spp.biogeo <- unique(suppressWarnings(sf::st_intersection(spp, biogeo)$short_name))
-	  if(any(spp.biogeo < min.ct)) {
-	    cat("***************************************************", "\n")
-        cat("**** Subseting data to ", length(unique(biogeo$short_name)),  " biogeographic regions", "\n")
+    br <- c(0,1,2)
+      names(br) <- c("Mediterranean", "Alpine", "Continental ")
+    biogeo.cts <- table(factor(as.numeric(extract(biogeo, spp)[,2]),
+	                     levels=c("0", "1", "2")))						 
+	  if(any(biogeo.cts < min.ct)) {
+	    vbg <- as.numeric(names(which(biogeo.cts >= min.ct)))
+		missing.biogeo <- as.numeric(setdiff(names(biogeo.cts), vbg))
+
+		cat("***************************************************", "\n")
+        cat("**** Subseting data to ", length(vbg),  " biogeographic regions", "\n")
         cat("***************************************************", "\n")
-        spp.biogeo <- names(which(spp.biogeo >= min.ct)) 		
-		if(length(spp.biogeo) > 0) {
-		biogeo.sub <- biogeo[which(biogeo$short_name %in% spp.biogeo),]
-          spp.mask <- mask(ref, vect(biogeo.sub))
-            spp.parms <- mask(r, spp.mask)
-		      spp.ref <- mask(pa.ref, vect(biogeo.sub))
+	    flush.console()	 
+        Sys.sleep(0.01)	
+		if(length(vbg) > 0) {
+		  spp.mask <- biogeo
+		    for(f in missing.biogeo) { spp.mask[spp.mask == f] <- NA }
+              spp.parms <- mask(r, spp.mask)
+		        spp.ref <- mask(dev, spp.mask)
+			cat("Removed", names(br)[which(br %in% missing.biogeo)], "bioregions", "\n")
 		} else {
           message("Not enough observations per geographic region, skipping model")
 		    next
@@ -242,9 +254,11 @@ ct=0
 	    cat("***************************************************", "\n")
         cat("**** Using full geographic extent of data", "\n")
         cat("***************************************************", "\n") 		  
+	    flush.console()	 
+        Sys.sleep(0.01)	
         spp.mask <- ref 
 		  spp.parms <- r
-		spp.ref <- pa.ref
+		    spp.ref <- dev
 	  }
 	  
     #***************************************************
@@ -254,7 +268,7 @@ ct=0
       #  rn <- length(ref[!is.na(ref)][,1])
       #  nsample <- round(rn * sfract, 0)
       #}
-    pa <- pseudo.absence(spp, n = nsample, KDE=FALSE, ref = spp.ref, sigma=bw.method)
+    pa <- pseudo.absence(spp, n = nsample, KDE=FALSE, ref = spp.ref, sigma = bw.method)
 	  report[["kde.bandwidth"]] = pa$sigma
       report[["kde.plugin"]] = bw.method 
       pa$sample <- cbind(pa$sample, 
@@ -320,10 +334,10 @@ ct=0
 	rf.exp <- ranger(y ~ ., data = dat, probability = TRUE, 
                      num.trees = nboot, importance="impurity_corrected")
       ( imp.p <- as.data.frame(importance_pvalues(rf.exp, method = "altmann", 
-                             formula = y ~ ., data = dat)) )
+                               formula = y ~ ., data = dat)) )
         nvars <- rownames(imp.p)[which(imp.p$pvalue < 0.05 & imp.p$importance > 0)] 
           dat <- data.frame(y=factor(dat$y), x[,nvars])
-   non.sig <- rownames(imp.p)[which(imp.p$pvalue >= 0.05 & imp.p$importance >= 0)]  
+    non.sig <- rownames(imp.p)[which(imp.p$pvalue >= 0.05 & imp.p$importance >= 0)]  
       if(length(non.sig) == 0) non.sig = NULL
     if(model.select) {	  
       rf.sel <- rf.modelSel(xdata = dat[2:ncol(dat)], ydata = dat$y, imp.scale = "mir", 
@@ -344,7 +358,7 @@ ct=0
       
     # Optimize fit on NULL class prediction variance
     p <- pfun(rf.fit, dat)
-    pidx <- which(dat$y == "0" & p > 0.50)  
+    pidx <- which(dat$y == "0" & p > 0.45)  
       if(length(pidx) > 0) {
 	    dat <- dat[-pidx,]
         rf.fit <- ranger(y = dat$y, x = dat[,2:ncol(dat)], probability = TRUE, 
@@ -450,7 +464,7 @@ ct=0
 	  }
 	 sdm <- predict(spp.parms, rf.fit, fun = pfun, na.rm = TRUE)
 	   names(sdm) <- "SDM"
-	     sdm <- mask(ifel(dev == 1, 0, sdm), sdm)
+	     sdm <- mask(sdm, spp.ref)
 	 sdm.class <- ifel(sdm >= report$p.threshold[1], 1, 0)
 	   names(sdm.class) <- "SDM_CLASS"
 	     sdm <- c(sdm, sdm.class)	
@@ -480,15 +494,13 @@ ct=0
 	  dotchart(imp, imp.names, pch=19, main="Variable Importance")
 
       # Plot probabilities
-	  pal <- ifelse(spp$y == "1", "red", "blue")      
-      plot(sdm[[1]], main=paste0("Estimated Probabilities for ", unique(spp$species)))	  
-	    plot(spp["y"], pch=20, cex=0.75, col=pal, add=TRUE)
-	      legend(4620000, 2250000,legend=c("presence", "absence"),
-		         pch=c(20,20), col=c("red", "blue"))   
-      plot(sdm[[2]], main=paste0("Classified probs for ", unique(spp$species)))	  
-	    plot(spp["y"], pch=20, cex=0.75, col=pal, add=TRUE)
-	      legend(4620000, 2250000,legend=c("presence", "absence"),
-		         pch=c(20,20), col=c("red", "blue"))   
+	  pal <- ifelse(spp$y == "1", "red", "blue") 
+      plot(sdm[[1]], main=paste0("Estimated Probabilities for ", unique(spp$species)))	  	  
+        plot(sdm[[2]], main=paste0("Classified probs for ", unique(spp$species)))
+	      plot(sdm[[1]], main=paste0("Estimated Probabilities (with traning points) for ", unique(spp$species)))	  
+	      plot(spp["y"], pch=20, cex=0.75, col=pal, add=TRUE)
+	        legend(4620000, 2250000,legend=c("presence", "absence"),
+		         pch=c(20,20), col=c("red", "blue"))       
 	  
 	#**** validation plots
 	# Cross-validation log-loss and error  
@@ -627,7 +639,7 @@ ct=0
 	
     save.image(file.path(getwd(), out.mdl))
       # terra::tmpFiles(current=TRUE, orphan=TRUE, old=TRUE, remove=TRUE)
-    remove(dat, rf.fit, prf, spp, spp.parms, sdm, rf.exp, rf.sel)   
+    remove(dat, rf.fit, spp, spp.parms, sdm, rf.exp, rf.sel, spp.ref, spp.mask)   
   gc()	
   } # End model Loop
 
